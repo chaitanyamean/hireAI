@@ -110,6 +110,12 @@
     <version>2.8.4</version>
 </dependency>
 
+<!-- Spring AOP (required for Resilience4j annotations) -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-aop</artifactId>
+</dependency>
+
 <!-- Resilience4j - Circuit Breaker -->
 <dependency>
     <groupId>io.github.resilience4j</groupId>

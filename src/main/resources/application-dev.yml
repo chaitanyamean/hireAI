@@ -18,6 +18,13 @@ spring:
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.3
+      embedding:
+        options:
+          model: text-embedding-3-small
 
   jpa:
     show-sql: true

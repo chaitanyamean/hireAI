@@ -37,3 +37,6 @@ build/
 
 ### Claude Code ###
 .claude/
+
+### Uploads ###
+uploads/
