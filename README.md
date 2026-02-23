@@ -2,18 +2,24 @@
 
 An intelligent hiring platform that leverages AI for resume parsing, candidate screening, semantic job matching, and automated interviews. Built with Spring Boot, Spring AI (OpenAI), PostgreSQL with pgvector, RabbitMQ, and Redis.
 
+🏆 Winner – Coding Shuttle Spring AI Hackathon
+
 ---
 
 ## Architecture
 
 ```mermaid
 graph TB
-    subgraph API Gateway
+    subgraph Client
+        UI[React / Postman]
+    end
+
+    subgraph API_GROUP[API Gateway]
         SC[Spring Security + JWT]
         RL[Redis Rate Limiter]
     end
 
-    subgraph REST Controllers
+    subgraph RC_GROUP[REST Controllers]
         AC[AuthController]
         JC[JobController]
         CC[CandidateController]
@@ -24,7 +30,7 @@ graph TB
         DC[DashboardController]
     end
 
-    subgraph Services
+    subgraph SVC_GROUP[Services]
         AS[AuthService]
         JS[JobService]
         CS[CandidateService]
@@ -35,24 +41,24 @@ graph TB
         DS[DashboardService]
     end
 
-    subgraph AI Layer
+    subgraph AI_GROUP[AI Layer]
         RAI[ResumeAIService]
         IAI[InterviewAIService]
         CB[Resilience4j Circuit Breakers]
     end
 
-    subgraph Infrastructure
+    subgraph INFRA_GROUP[Infrastructure]
         PG[(PostgreSQL 16 + pgvector)]
         RD[(Redis 7)]
         RMQ[RabbitMQ 3]
         OAI[OpenAI API gpt-4o-mini]
     end
 
-    UI --> SC --> RL --> REST Controllers
-    REST Controllers --> Services
-    Services --> PG
-    Services --> RD
-    Services --> RMQ
+    UI --> SC --> RL --> RC_GROUP
+    RC_GROUP --> SVC_GROUP
+    SVC_GROUP --> PG
+    SVC_GROUP --> RD
+    SVC_GROUP --> RMQ
     RAI --> CB --> OAI
     IAI --> CB
     MS --> PG
