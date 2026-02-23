@@ -4,63 +4,8 @@ An intelligent hiring platform that leverages AI for resume parsing, candidate s
 
 ---
 
-## Architecture
-
-```mermaid
-graph TB
-    subgraph Client
-        UI[React / Postman]
-    end
-
-    subgraph API Gateway
-        SC[Spring Security + JWT]
-        RL[Redis Rate Limiter]
-    end
-
-    subgraph REST Controllers
-        AC[AuthController]
-        JC[JobController]
-        CC[CandidateController]
-        RC[ResumeController]
-        APC[ApplicationController]
-        IC[InterviewController]
-        MC[MatchController]
-        DC[DashboardController]
-    end
-
-    subgraph Services
-        AS[AuthService]
-        JS[JobService]
-        CS[CandidateService]
-        RS[ResumeService]
-        APS[ApplicationService]
-        IS[InterviewService]
-        MS[JobMatchService]
-        DS[DashboardService]
-    end
-
-    subgraph AI Layer
-        RAI[ResumeAIService]
-        IAI[InterviewAIService]
-        CB[Resilience4j Circuit Breakers]
-    end
-
-    subgraph Infrastructure
-        PG[(PostgreSQL 16 + pgvector)]
-        RD[(Redis 7)]
-        RMQ[RabbitMQ 3]
-        OAI[OpenAI API gpt-4o-mini]
-    end
-
-    UI --> SC --> RL --> REST Controllers
-    REST Controllers --> Services
-    Services --> PG
-    Services --> RD
-    Services --> RMQ
-    RAI --> CB --> OAI
-    IAI --> CB
-    MS --> PG
-```
+## Demo
+https://www.loom.com/share/311b5e0ffd274a64bb57b12b536b63fb
 
 ## Tech Stack
 
