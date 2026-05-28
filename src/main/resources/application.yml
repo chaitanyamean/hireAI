@@ -29,6 +29,36 @@ management:
     circuitbreakers:
       enabled: true
 
+  # ── OpenTelemetry / Micrometer Tracing ──────────────────────────────────────
+  # tracing.sampling.probability:
+  #   1.0 = trace 100% of requests (use in dev/staging)
+  #   0.1 = trace 10% of requests  (use in production to reduce overhead)
+  tracing:
+    sampling:
+      probability: 1.0
+
+  # Expose traceId + spanId in the /actuator/health response
+  # so you can correlate health checks with traces
+  observations:
+    annotations:
+      enabled: true
+
+# ── OTel SDK auto-configuration ─────────────────────────────────────────────
+# These properties are read by opentelemetry-sdk-extension-autoconfigure.
+# The service.name appears as the application name in Jaeger's UI.
+# The OTLP endpoint points to the OTel Collector's gRPC receiver (port 4317).
+otel:
+  service:
+    name: hireai
+  exporter:
+    otlp:
+      endpoint: http://localhost:4317   # OTel Collector gRPC port
+      protocol: grpc
+  # Propagators define how trace context is passed between services.
+  # tracecontext = W3C standard (HTTP headers: traceparent, tracestate)
+  # baggage       = W3C baggage (carry key-value pairs across service boundaries)
+  propagators: tracecontext,baggage
+
 resilience4j:
   circuitbreaker:
     configs:
@@ -71,3 +101,16 @@ springdoc:
     path: /swagger-ui.html
   api-docs:
     path: /v3/api-docs
+
+# ── Logging: inject traceId + spanId into every log line ────────────────────
+# Micrometer Tracing automatically populates MDC keys "traceId" and "spanId".
+# We include them in the log pattern so you can grep logs by trace ID,
+# or jump from a Jaeger trace directly to the matching log lines.
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level [traceId=%X{traceId} spanId=%X{spanId}] %logger{36} - %msg%n"
+  level:
+    # Show OTel SDK startup info so you can confirm it connected to the Collector
+    io.opentelemetry: INFO
+    # Show Micrometer tracing bridge activity
+    io.micrometer.tracing: INFO

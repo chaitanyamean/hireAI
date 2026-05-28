@@ -1,0 +1,88 @@
+# OpenTelemetry Collector Configuration
+#
+# LESSON: The Collector has 3 sections:
+#
+#   receivers:  HOW data comes IN  (your app pushes to us via OTLP)
+#   exporters:  WHERE data goes OUT (Jaeger for traces, Prometheus for metrics)
+#   pipelines:  WIRES receivers → processors → exporters
+#
+# Think of it like a Unix pipe:
+#   app → [otlp receiver] → [batch processor] → [jaeger exporter]
+#                                              → [prometheus exporter]
+
+receivers:
+  # OTLP receiver: listens for spans/metrics/logs from your Spring Boot app.
+  # Your app sends to grpc port 4317 (configured in application.yml otel.exporter.otlp.endpoint).
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317   # gRPC — used by opentelemetry-exporter-otlp
+      http:
+        endpoint: 0.0.0.0:4318   # HTTP/JSON — useful for browser SDKs or curl testing
+
+processors:
+  # Batch processor: buffers spans and sends them in batches to reduce network overhead.
+  # send_batch_size: send when we have 512 spans buffered
+  # timeout: send whatever we have after 5 seconds even if batch isn't full
+  # This is important for production — without batching, every span is a separate network call.
+  batch:
+    send_batch_size: 512
+    timeout: 5s
+
+  # Memory limiter: prevents the Collector from OOM-crashing if your app sends a spike of data.
+  # check_interval: how often to check memory usage
+  # limit_mib: hard limit — start dropping data above this
+  # spike_limit_mib: soft limit — start GC above this
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+exporters:
+  # Jaeger exporter: sends traces to Jaeger's gRPC collector endpoint.
+  # Jaeger stores them and provides the UI for searching/visualizing traces.
+  otlp/jaeger:
+    endpoint: jaeger:4317   # Jaeger's OTLP gRPC port (Docker service name)
+    tls:
+      insecure: true        # No TLS in local dev
+
+  # Prometheus exporter: exposes a /metrics endpoint that Prometheus scrapes.
+  # The Collector translates OTel metrics → Prometheus format automatically.
+  prometheus:
+    endpoint: 0.0.0.0:8889  # Prometheus will scrape this port
+
+  # Debug exporter: prints spans to the Collector's stdout.
+  # VERY useful when learning — you can see exactly what your app is sending.
+  # Remove or set verbosity: basic in production.
+  debug:
+    verbosity: detailed
+
+extensions:
+  # Health check endpoint for Docker health checks and readiness probes
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+
+  # Pipelines wire everything together.
+  # You can have multiple pipelines for different signal types.
+  pipelines:
+
+    # TRACES pipeline: receives spans from your app, batches them, sends to Jaeger
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger, debug]
+
+    # METRICS pipeline: receives metrics from your app, exposes for Prometheus to scrape
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+
+    # LOGS pipeline: receives structured logs (if you add OTel log appender later)
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]

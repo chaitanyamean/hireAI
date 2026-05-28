@@ -173,6 +173,54 @@
     <groupId>io.micrometer</groupId>
     <artifactId>micrometer-registry-prometheus</artifactId>
 </dependency>
+
+<!-- ============================================================ -->
+<!-- OPENTELEMETRY — Distributed Tracing                          -->
+<!-- ============================================================ -->
+
+<!--
+  micrometer-tracing-bridge-otel:
+  Spring Boot 3 uses Micrometer Tracing as its tracing abstraction.
+  This bridge connects Micrometer's Tracer API to the real OTel SDK.
+  Think of it as an adapter: your code calls Micrometer, OTel does the work.
+-->
+<dependency>
+    <groupId>io.micrometer</groupId>
+    <artifactId>micrometer-tracing-bridge-otel</artifactId>
+</dependency>
+
+<!--
+  opentelemetry-exporter-otlp:
+  Sends spans (traces) from your app to the OTel Collector
+  using the OTLP protocol over gRPC (port 4317).
+  The Collector then forwards to Jaeger, Zipkin, etc.
+-->
+<dependency>
+    <groupId>io.opentelemetry</groupId>
+    <artifactId>opentelemetry-exporter-otlp</artifactId>
+</dependency>
+
+<!--
+  opentelemetry-sdk-extension-autoconfigure:
+  Enables OTel SDK auto-configuration via application.yml properties
+  (e.g., otel.exporter.otlp.endpoint, otel.service.name).
+  Without this, you'd have to configure the SDK programmatically.
+-->
+<dependency>
+    <groupId>io.opentelemetry</groupId>
+    <artifactId>opentelemetry-sdk-extension-autoconfigure</artifactId>
+</dependency>
+
+<!--
+  micrometer-tracing (test support):
+  Provides SimpleTracer for unit tests — lets you assert that
+  specific spans were created without needing a real OTel backend.
+-->
+<dependency>
+    <groupId>io.micrometer</groupId>
+    <artifactId>micrometer-tracing-test</artifactId>
+    <scope>test</scope>
+</dependency>
 	</dependencies>
 
 	<repositories>

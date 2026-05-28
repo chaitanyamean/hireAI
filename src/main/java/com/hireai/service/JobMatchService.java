@@ -11,15 +11,16 @@ import com.hireai.exception.AiProcessingException;
 import com.hireai.exception.ResourceNotFoundException;
 import com.hireai.repository.ApplicationRepository;
 import com.hireai.repository.JobRepository;
-import com.hireai.repository.ResumeRepository;
 import com.hireai.repository.VectorSearchRepository;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.converter.BeanOutputConverter;
-import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
-import io.github.resilience4j.retry.annotation.Retry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.io.Resource;
@@ -31,6 +32,22 @@ import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Job matching service — vector search + AI explanation.
+ *
+ * OPENTELEMETRY LESSON — Tracing Across Cache + DB:
+ * ──────────────────────────────────────────────────
+ * The @Cacheable methods are interesting to trace because:
+ *   - On a CACHE HIT:  the span will be very short (< 1ms) — Redis returned the result
+ *   - On a CACHE MISS: the span will be longer — it hit pgvector for cosine similarity
+ *
+ * You can see this difference directly in Jaeger's timeline without any extra code,
+ * because the JDBC auto-instrumentation creates child spans for every SQL query.
+ * A cache hit trace will have NO child DB spans; a cache miss will show the pgvector query.
+ *
+ * We add a custom span around the vector search to tag the result count and job ID,
+ * making it easy to compare search performance across different jobs.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -38,10 +55,10 @@ public class JobMatchService {
 
     private final VectorSearchRepository vectorSearchRepository;
     private final JobRepository jobRepository;
-    private final ResumeRepository resumeRepository;
     private final ApplicationRepository applicationRepository;
     private final ChatClient chatClient;
     private final ObjectMapper objectMapper;
+    private final Tracer tracer;
 
     @Value("classpath:prompts/match-explain.st")
     private Resource matchExplainPrompt;
@@ -56,52 +73,95 @@ public class JobMatchService {
             throw new AiProcessingException("Job embedding not yet generated. Please wait and try again.");
         }
 
-        List<Map<String, Object>> results = vectorSearchRepository.findMatchingCandidates(jobId, limit);
-        log.info("Vector search found {} matching candidates for job {}", results.size(), jobId);
+        // Custom span for the vector search operation.
+        // The JDBC auto-instrumentation will create a child span for the actual SQL,
+        // so in Jaeger you'll see: vector.search.candidates → SQL (pgvector cosine query)
+        Span span = tracer.nextSpan().name("vector.search.candidates").start();
+        try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
 
-        return results.stream().map(row -> {
-            BigDecimal similarity = toBigDecimal(row.get("similarity"));
-            return MatchResultResponse.builder()
-                    .candidateId(toLong(row.get("candidate_id")))
-                    .jobId(jobId)
-                    .similarityScore(similarity.multiply(BigDecimal.valueOf(100)).setScale(1, RoundingMode.HALF_UP))
-                    .aiExplanation("Skills: " + row.get("skills") + " | " + row.get("experience_summary"))
-                    .build();
-        }).toList();
+            span.tag("job.id", String.valueOf(jobId));
+            span.tag("job.title", job.getTitle());
+            span.tag("search.limit", String.valueOf(limit));
+
+            List<Map<String, Object>> results = vectorSearchRepository.findMatchingCandidates(jobId, limit);
+
+            span.tag("search.results_count", String.valueOf(results.size()));
+            log.info("Vector search found {} matching candidates for job {}", results.size(), jobId);
+
+            return results.stream().map(row -> {
+                BigDecimal similarity = toBigDecimal(row.get("similarity"));
+                return MatchResultResponse.builder()
+                        .candidateId(toLong(row.get("candidate_id")))
+                        .jobId(jobId)
+                        .similarityScore(similarity.multiply(BigDecimal.valueOf(100)).setScale(1, RoundingMode.HALF_UP))
+                        .aiExplanation("Skills: " + row.get("skills") + " | " + row.get("experience_summary"))
+                        .build();
+            }).toList();
+
+        } catch (Exception e) {
+            span.error(e);
+            throw e;
+        } finally {
+            span.end();
+        }
     }
 
     @Cacheable(value = "recommendedJobs", key = "#candidateId + '-' + #limit")
     @Transactional(readOnly = true)
     public List<MatchResultResponse> getRecommendedJobsForCandidate(Long candidateId, int limit) {
-        List<Map<String, Object>> results = vectorSearchRepository.findMatchingJobs(candidateId, limit);
-        log.info("Vector search found {} matching jobs for candidate {}", results.size(), candidateId);
+        Span span = tracer.nextSpan().name("vector.search.jobs").start();
+        try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
 
-        return results.stream().map(row -> {
-            BigDecimal similarity = toBigDecimal(row.get("similarity"));
-            return MatchResultResponse.builder()
-                    .candidateId(candidateId)
-                    .jobId(toLong(row.get("job_id")))
-                    .similarityScore(similarity.multiply(BigDecimal.valueOf(100)).setScale(1, RoundingMode.HALF_UP))
-                    .aiExplanation(row.get("title") + " | Skills: " + row.get("must_have_skills"))
-                    .build();
-        }).toList();
+            span.tag("candidate.id", String.valueOf(candidateId));
+            span.tag("search.limit", String.valueOf(limit));
+
+            List<Map<String, Object>> results = vectorSearchRepository.findMatchingJobs(candidateId, limit);
+
+            span.tag("search.results_count", String.valueOf(results.size()));
+            log.info("Vector search found {} matching jobs for candidate {}", results.size(), candidateId);
+
+            return results.stream().map(row -> {
+                BigDecimal similarity = toBigDecimal(row.get("similarity"));
+                return MatchResultResponse.builder()
+                        .candidateId(candidateId)
+                        .jobId(toLong(row.get("job_id")))
+                        .similarityScore(similarity.multiply(BigDecimal.valueOf(100)).setScale(1, RoundingMode.HALF_UP))
+                        .aiExplanation(row.get("title") + " | Skills: " + row.get("must_have_skills"))
+                        .build();
+            }).toList();
+
+        } catch (Exception e) {
+            span.error(e);
+            throw e;
+        } finally {
+            span.end();
+        }
     }
 
     @CircuitBreaker(name = "aiService", fallbackMethod = "getMatchExplanationFallback")
     @Retry(name = "aiService")
     @Transactional(readOnly = true)
     public MatchResultResponse getMatchExplanation(Long applicationId) {
-        Application application = applicationRepository.findById(applicationId)
-                .orElseThrow(() -> new ResourceNotFoundException("Application", applicationId));
+        Span span = tracer.nextSpan().name("ai.match.explain").start();
+        try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
 
-        Job job = application.getJob();
-        Resume resume = application.getResume();
+            span.tag("ai.model", "gpt-4o-mini");
+            span.tag("ai.operation", "match_explain");
+            span.tag("application.id", String.valueOf(applicationId));
 
-        if (resume == null || resume.getParsedData() == null) {
-            throw new AiProcessingException("Resume not yet parsed for this application");
-        }
+            Application application = applicationRepository.findById(applicationId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Application", applicationId));
 
-        try {
+            Job job = application.getJob();
+            Resume resume = application.getResume();
+
+            span.tag("job.title", job.getTitle());
+            span.tag("job.id", String.valueOf(job.getId()));
+
+            if (resume == null || resume.getParsedData() == null) {
+                throw new AiProcessingException("Resume not yet parsed for this application");
+            }
+
             ParsedResume parsed = objectMapper.readValue(resume.getParsedData(), ParsedResume.class);
 
             BeanOutputConverter<MatchExplanation> converter = new BeanOutputConverter<>(MatchExplanation.class);
@@ -113,10 +173,7 @@ public class JobMatchService {
                         .reduce((a, b) -> a + "; " + b).orElse("None")
                     : "None";
 
-            PromptTemplate template = PromptTemplate.builder()
-                    .resource(matchExplainPrompt)
-                    .build();
-
+            PromptTemplate template = PromptTemplate.builder().resource(matchExplainPrompt).build();
             String prompt = template.render(Map.of(
                     "jobTitle", job.getTitle(),
                     "jobDescription", job.getDescription() != null ? job.getDescription() : "Not provided",
@@ -129,12 +186,13 @@ public class JobMatchService {
                     "format", converter.getFormat()
             ));
 
-            String response = chatClient.prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            span.event("openai.request.sent");
+            String response = chatClient.prompt().user(prompt).call().content();
+            span.event("openai.response.received");
 
             MatchExplanation explanation = converter.convert(response);
+            span.tag("ai.result.score", String.valueOf(explanation.score()));
+
             log.info("Match explanation generated for application {}: score={}", applicationId, explanation.score());
 
             return MatchResultResponse.builder()
@@ -148,10 +206,14 @@ public class JobMatchService {
                     .build();
 
         } catch (AiProcessingException e) {
+            span.error(e);
             throw e;
         } catch (Exception e) {
+            span.error(e);
             log.error("Failed to generate match explanation for application {}", applicationId, e);
             throw new AiProcessingException("Failed to generate match explanation", e);
+        } finally {
+            span.end();
         }
     }
 

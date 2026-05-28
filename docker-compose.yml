@@ -10,12 +10,19 @@ services:
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_DATA_REDIS_HOST: redis
       SPRING_AI_OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # Point the app's OTel exporter at the Collector inside Docker network.
+      # When running locally (./mvnw spring-boot:run), this stays as localhost:4317
+      # (configured in application.yml). This env var overrides it for Docker.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: hireai
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      otel-collector:
         condition: service_healthy
 
   # === DATABASE ===
@@ -65,6 +72,63 @@ services:
       interval: 10s
       timeout: 10s
       retries: 5
+
+  # ============================================================
+  # OBSERVABILITY STACK
+  # ============================================================
+
+  # === OPENTELEMETRY COLLECTOR ===
+  # Receives spans/metrics from the app via OTLP, fans out to Jaeger + Prometheus.
+  # Think of it as a smart router for telemetry data.
+  #
+  # Ports:
+  #   4317 — OTLP gRPC (your app sends here)
+  #   4318 — OTLP HTTP (alternative, useful for curl testing)
+  #   8889 — Prometheus metrics scrape endpoint
+  #   13133 — Health check
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel-collector-config.yml"]
+    volumes:
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+    ports:
+      - "4317:4317"    # OTLP gRPC — your local app connects here
+      - "4318:4318"    # OTLP HTTP
+      - "8889:8889"    # Prometheus scrape
+      - "13133:13133"  # Health check
+    depends_on:
+      - jaeger
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # === JAEGER (All-in-One) ===
+  # Stores and visualizes distributed traces.
+  # "all-in-one" bundles the collector, query service, and UI in one container.
+  # Perfect for local dev — use a proper Jaeger deployment (with Cassandra/ES) in prod.
+  #
+  # Ports:
+  #   16686 — Jaeger UI (open this in your browser)
+  #   4317  — OTLP gRPC (the Collector sends traces here)
+  #   14268 — Jaeger HTTP collector (legacy, not used here)
+  jaeger:
+    image: jaegertracing/all-in-one:1.58
+    environment:
+      # Use in-memory storage for local dev (data lost on restart).
+      # For persistence, use SPAN_STORAGE_TYPE=elasticsearch or badger.
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: memory
+      MEMORY_MAX_TRACES: 50000
+    ports:
+      - "16686:16686"  # Jaeger UI — open http://localhost:16686
+      - "14268:14268"  # Jaeger HTTP collector (legacy)
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   pgdata:
